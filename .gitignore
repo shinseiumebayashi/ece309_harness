@@ -1,0 +1,5 @@
+.DS_Store
+harness
+harness_debug
+*.o
+*.dSYM/
