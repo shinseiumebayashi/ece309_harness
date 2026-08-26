@@ -165,11 +165,46 @@ fi
 # not enabled by default on macOS, so we request it explicitly via
 # ASAN_OPTIONS; on Linux it is on already and the flag is harmless.
 # ------------------------------------------------------------
+# ---- 7. model-driven tool call (v2) ----
+# The model must ask for the tool by emitting the sentinel, the harness
+# must run it, and the model must then phrase a final answer. All three
+# stages have to appear for this to pass.
+V2_OUT=$(printf 'what is 12 * 5\nexit\n' | "$BIN" 2>&1)
+
+if printf '%s' "$V2_OUT" | grep -q 'TOOL_CALL: multiply(12, 5)' \
+   && printf '%s' "$V2_OUT" | grep -q 'result = 60' \
+   && printf '%s' "$V2_OUT" | grep -q 'The answer is 60'; then
+    pass "7. model-driven tool call round trip"
+else
+    fail "7. model-driven tool call round trip"
+    printf '      --- actual output ---\n'
+    printf '%s\n' "$V2_OUT" | sed 's/^/      /'
+fi
+
+# ---- 8. word-boundary fix for the greeting ----
+# v1 greeted "this is a test" because strstr found the "hi" in "this".
+check_contains \
+    "8. 'hi' no longer matches inside 'this'" \
+    'this is a test
+exit
+' \
+    'I received: this is a test'
+
+# ---- 9. the tool refusing does not crash the round trip ----
+check_contains_and_status \
+    "9. model-driven division by zero survives" \
+    'what is 10 / 0
+exit
+' \
+    'could not be completed'
+
 printf '\n=== memory check ===\n'
 
 if [ "$(uname)" = "Darwin" ]; then
-    # LeakSanitizer does not work on macOS, so use Apple's own
-    # `leaks` tool. It reports a non-zero status when it finds any.
+    # LeakSanitizer is not implemented on macOS -- ASAN_OPTIONS=detect_leaks=1
+    # is silently ignored there, so the check would inspect nothing at all.
+    # Apple's own leaks(1) is used instead. This was found by deliberately
+    # deleting a free() and watching the test still pass.
     printf 'platform: macOS -- using leaks(1)\n'
 
     if gcc -g "$SRC" -o harness_debug 2>/dev/null; then
@@ -177,14 +212,14 @@ if [ "$(uname)" = "Darwin" ]; then
             | MallocStackLogging=1 leaks --atExit -- "$DBG" 2>&1)
 
         if printf '%s' "$LEAK_OUT" | grep -q '0 leaks for 0 total leaked bytes'; then
-            pass "7. no leaks"
+            pass "10. no leaks"
         else
-            fail "7. no leaks"
+            fail "10. no leaks"
             printf '      --- leaks output ---\n'
             printf '%s\n' "$LEAK_OUT" | grep -i 'leak' | sed 's/^/      /'
         fi
     else
-        fail "7. could not build the debug binary"
+        fail "10. could not build the debug binary"
     fi
 else
     # Linux: AddressSanitizer includes LeakSanitizer.
@@ -195,13 +230,15 @@ else
             | ASAN_OPTIONS=detect_leaks=1 "$DBG" 2>&1)
 
         if printf '%s' "$ASAN_OUT" | grep -q 'LeakSanitizer\|ERROR: AddressSanitizer'; then
-            fail "7. no leaks or memory errors"
-            printf '%s\n' "$ASAN_OUT" | grep -A 20 'LeakSanitizer\|ERROR' | sed 's/^/      /'
+            fail "10. no leaks or memory errors"
+            printf '      --- sanitizer output ---\n'
+            printf '%s\n' "$ASAN_OUT" | grep -A 20 'LeakSanitizer\|ERROR: AddressSanitizer' \
+                | sed 's/^/      /'
         else
-            pass "7. no leaks or memory errors"
+            pass "10. no leaks or memory errors"
         fi
     else
-        fail "7. could not build the sanitizer binary"
+        fail "10. could not build the sanitizer binary"
     fi
 fi
 
